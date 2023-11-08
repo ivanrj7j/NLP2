@@ -27,7 +27,7 @@ If you're as excited as we are about experimental NLP, follow these steps:
 1. Clone this repository to your local machine:
 
    ```bash
-   git clone https://github.com/ivanrj7j/NLP
+   git clone https://github.com/ivanrj7j/NLP2
    ```
 
 2. Set up your development environment and explore our daring experiments.

@@ -1,20 +1,23 @@
 import numpy as np
 from DataLoader import Paginator
 from Tokenizer import NLPTokenizer
-from pandas import read_csv
 from tensorflow.data import Dataset
 from tensorflow import TensorSpec, constant, one_hot  
-from tensorflow import uint8 as tfUInt8
-from tensorflow import uint16 as tfUInt16
+from tensorflow import uint16 as tfInt16
+from tensorflow import uint8 as tfInt8
+from pandas import read_csv
+from copy import deepcopy
 
 class TrainLoader(Paginator):
     """
-    # Train Loader
+    # TrainLoader
 
-    Goes through each text file and converts them to tokens, if the tokens are over sequencelength, it gives more than one batch
+    TrainLoader is used for loading data for training NLP models, this module is a child of `Paginator`
+
+    TrainLoader reads through a pandas iterable and tokenizes text using `NLPTokenizer`
     """
     
-    def __init__(self, batchSize: int, sequenceLength:int, tokenizerFile:str, dataFile:str, shouldShuffle=True, dataFileChunkSize:int=32) -> None:
+    def __init__(self, batchSize: int, sequenceLength:int, tokenizerFile:str, dataFile:str, dataFileChunkSize:int, shouldShuffle=True) -> None:
         """
         Initiates module
         
@@ -22,32 +25,27 @@ class TrainLoader(Paginator):
 
         batchSize -- number of items in the batch
 
-        sequenceLength -- Maximum tokens
+        sequenceLength (int) -- Maximum tokens
 
-        tokenizerFile -- Path to the tokenizer json file
+        tokenizerFile (str) -- Path to the tokenizer json file
 
-        dataFile -- Path to the csv data file
+        dataFile (str) -- Path to the csv file containg data
+
+        dataFileChunkSize (str) -- Size of 1 chunk to load from csv
 
         shouldShuffle -- shuffles data if true
 
-        dataFileChunkSize -- Chunk size of the data file
-
         Return: None
         """
-
+        
         super().__init__(batchSize, shouldShuffle)
+        self.tokenizer = NLPTokenizer(tokenizerFile, sequenceLength)
         self.sequenceLength = sequenceLength
-        self.tokenizer = NLPTokenizer(tokenizerFile, sequenceLength+1) # added 1 to have one reserved as label
-        # setting up tokenizer 
-
+        
         self.dataFile = dataFile
         self.dataFileChunkSize = dataFileChunkSize
 
-        self.regenerateData()
-        # setting training data 
-
-    def regenerateData(self):
-        self.data = read_csv(self.dataFile, index_col=False, chunksize=self.dataFileChunkSize)
+        self.data = read_csv(dataFile, chunksize=dataFileChunkSize, index_col=False)
 
     def nextBatch(self) -> np.ndarray:
         """
@@ -55,11 +53,12 @@ class TrainLoader(Paginator):
         """
         try:
             data = self.data.__next__()['0']
-            x, y = zip(*data.apply(lambda j: self.trainTokenizeText(j)))
+            x, y = zip(*data.apply(lambda x: self.trainTokenizeText(x)))
 
             return np.hstack((np.vstack(x), np.hstack(y).reshape(-1, 1)))
         except StopIteration:
-            self.regenerateData()
+            self.data = read_csv(self.dataFile, chunksize=self.dataFileChunkSize, index_col=False)
+
             raise StopIteration()
         
     
@@ -73,8 +72,20 @@ class TrainLoader(Paginator):
 
         Return: a matrix of tokens
         """
-        encodedMatrix = self.tokenizer.encode(text)
-        return encodedMatrix[:, :-1], encodedMatrix[:, -1]
+        
+        encodedMatrix = self.tokenizer.encode(text, False)
+        x = []
+        y = []
+        for vector in encodedMatrix:
+            for i in range(1, len(vector)):
+                start = max(0, i-self.sequenceLength)
+                data = vector[start:i]
+                if len(data) < self.sequenceLength:
+                    data = np.pad(data, (self.sequenceLength-len(data), 0), 'constant', constant_values=0)
+                x.append(data)
+                y.append(vector[i])
+        
+        return np.vstack(x).astype(np.uint16), np.array(y, dtype=np.uint16)
     
     def __next__(self):
         array = super().__next__()
@@ -88,11 +99,9 @@ class TrainLoader(Paginator):
 
         def generatorFunc():
             for x, y in self:
-                yield constant(x, tfUInt16), one_hot(y.reshape((-1)), self.tokenizer.tokenizer.get_vocab_size(), dtype=tfUInt8)
+                yield constant(x, tfInt16), one_hot(y.reshape((-1)), self.tokenizer.tokenizer.get_vocab_size(), dtype=tfInt8)
         
         return Dataset.from_generator(generatorFunc, output_signature=((
-            TensorSpec(shape=(self.batchSize, self.sequenceLength), dtype=tfUInt16),  # Features
-            TensorSpec(shape=(self.batchSize, self.tokenizer.tokenizer.get_vocab_size()), dtype=tfUInt8) # Labels
+            TensorSpec(shape=(self.batchSize, self.sequenceLength), dtype=tfInt16),  # Features
+            TensorSpec(shape=(self.batchSize, self.tokenizer.tokenizer.get_vocab_size()), dtype=tfInt8) # Labels
         )))
-
-       
